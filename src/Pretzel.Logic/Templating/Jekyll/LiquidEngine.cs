@@ -1,9 +1,11 @@
-﻿using System;
-using System.ComponentModel.Composition;
-using DotLiquid;
+﻿using DotLiquid;
+using Pretzel.Logic.Extensions;
 using Pretzel.Logic.Liquid;
 using Pretzel.Logic.Templating.Context;
 using Pretzel.Logic.Templating.Jekyll.Liquid;
+using System;
+using System.ComponentModel.Composition;
+using System.Text.RegularExpressions;
 
 namespace Pretzel.Logic.Templating.Jekyll
 {
@@ -11,7 +13,8 @@ namespace Pretzel.Logic.Templating.Jekyll
     [SiteEngineInfo(Engine = "liquid")]
     public class LiquidEngine : JekyllEngineBase
     {
-        SiteContextDrop contextDrop;
+        private SiteContextDrop contextDrop;
+        private readonly Regex emHtmlRegex = new Regex(@"(?<=\{[\{\%].*?)(</?em>)(?=.*?[\%\}]\})", RegexOptions.Compiled);
 
         public LiquidEngine()
         {
@@ -21,16 +24,29 @@ namespace Pretzel.Logic.Templating.Jekyll
         protected override void PreProcess()
         {
             contextDrop = new SiteContextDrop(Context);
+
+            Template.FileSystem = new Includes(Context.SourceFolder, FileSystem);
+
             if (Filters != null)
             {
-               foreach (var filter in Filters)
-               {
-                  Template.RegisterFilter(filter.GetType());
-               }
+                foreach (var filter in Filters)
+                {
+                    Template.RegisterFilter(filter.GetType());
+                }
+            }
+            if (Tags != null)
+            {
+                var registerTagMethod = typeof(Template).GetMethod("RegisterTag", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+
+                foreach (var tag in Tags)
+                {
+                    var registerTagGenericMethod = registerTagMethod.MakeGenericMethod(new[] { tag.GetType() });
+                    registerTagGenericMethod.Invoke(null, new[] { tag.Name.ToUnderscoreCase() });
+                }
             }
         }
 
-        Hash CreatePageData(PageContext pageContext)
+        private Hash CreatePageData(PageContext pageContext)
         {
             var y = Hash.FromDictionary(pageContext.Bag);
 
@@ -52,7 +68,7 @@ namespace Pretzel.Logic.Templating.Jekyll
                 wtftime = Hash.FromAnonymousObject(new { date = DateTime.Now }),
                 page = y,
                 content = pageContext.Content,
-                paginator = pageContext.Paginator, 
+                paginator = pageContext.Paginator,
             });
 
             return x;
@@ -60,10 +76,13 @@ namespace Pretzel.Logic.Templating.Jekyll
 
         protected override string RenderTemplate(string templateContents, PageContext pageData)
         {
+            // Replace all em HTML tags in liquid tags ({{ or {%) by underscores
+            templateContents = emHtmlRegex.Replace(templateContents, "_");
+
             var data = CreatePageData(pageData);
             var template = Template.Parse(templateContents);
-            Template.FileSystem = new Includes(Context.SourceFolder);
             var output = template.Render(data);
+
             return output;
         }
 
@@ -77,7 +96,6 @@ namespace Pretzel.Logic.Templating.Jekyll
             Template.RegisterFilter(typeof(UriEscapeFilter));
             Template.RegisterFilter(typeof(NumberOfWordsFilter));
             Template.RegisterTag<HighlightBlock>("highlight");
-            Template.RegisterTag<PostUrlBlock>("post_url");
         }
     }
 }

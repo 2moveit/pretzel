@@ -18,6 +18,12 @@ deploy-to-ec2*
 TestResults/
 build/
 tests/
+*.ncrunchproject
+*.ncrunchsolution
+*.GhostDoc.xml
 
 CommonAssemblyInfo.cs
 Thumbs.db
+
+# Roslyn cache directories
+*.ide/

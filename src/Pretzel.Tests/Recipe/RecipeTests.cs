@@ -1,12 +1,15 @@
-﻿using System;
+﻿using NSubstitute;
+using Pretzel.Logic.Extensibility;
+using Pretzel.Logic.Extensions;
+using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.IO.Abstractions;
 using System.IO.Abstractions.TestingHelpers;
 using System.Linq;
 using System.Text;
-using NSubstitute;
-using Pretzel.Logic.Extensibility;
-using Pretzel.Logic.Extensions;
+using System.Threading;
 using Xunit;
 using Xunit.Extensions;
 
@@ -14,10 +17,10 @@ namespace Pretzel.Tests.Recipe
 {
     public class RecipeTests
     {
-        const string BaseSite = @"c:\site\";
-        MockFileSystem fileSystem = new MockFileSystem(new Dictionary<string, MockFileData>());
-		readonly StringBuilder sb = new StringBuilder();
-		readonly TextWriter writer;
+        private const string BaseSite = @"c:\site\";
+        private MockFileSystem fileSystem = new MockFileSystem(new Dictionary<string, MockFileData>());
+        private readonly StringBuilder sb = new StringBuilder();
+        private readonly TextWriter writer;
 
         public RecipeTests()
         {
@@ -37,6 +40,7 @@ namespace Pretzel.Tests.Recipe
             Assert.True(fileSystem.Directory.Exists(BaseSite + @"_layouts\"));
             Assert.True(fileSystem.Directory.Exists(BaseSite + @"css\"));
             Assert.True(fileSystem.Directory.Exists(BaseSite + @"img\"));
+            Assert.True(fileSystem.Directory.Exists(BaseSite + @"_includes\"));
 
             Assert.True(fileSystem.File.Exists(BaseSite + "sitemap.xml"));
             Assert.True(fileSystem.File.Exists(BaseSite + "rss.xml"));
@@ -51,6 +55,7 @@ namespace Pretzel.Tests.Recipe
             Assert.True(fileSystem.File.Exists(BaseSite + @"img\favicon.png"));
             Assert.True(fileSystem.File.Exists(BaseSite + @"img\logo.png"));
             Assert.True(fileSystem.File.Exists(BaseSite + @"img\favicon.ico"));
+            Assert.True(fileSystem.File.Exists(BaseSite + @"_includes\head.html"));
 
             Assert.True(writer.ToString().Contains("Pretzel site template has been created"));
         }
@@ -67,10 +72,16 @@ namespace Pretzel.Tests.Recipe
             Assert.True(fileSystem.Directory.Exists(BaseSite + @"_layouts\"));
             Assert.True(fileSystem.Directory.Exists(BaseSite + @"css\"));
             Assert.True(fileSystem.Directory.Exists(BaseSite + @"img\"));
+            Assert.True(fileSystem.Directory.Exists(BaseSite + @"_includes\"));
             Assert.True(fileSystem.File.Exists(BaseSite + @"_layouts\layout.cshtml"));
             Assert.True(fileSystem.File.Exists(BaseSite + "index.md"));
             Assert.True(fileSystem.File.Exists(BaseSite + @"css\style.css"));
             Assert.True(fileSystem.File.Exists(BaseSite + @"img\favicon.ico"));
+            
+            if(!wiki)
+            { 
+                Assert.True(fileSystem.File.Exists(BaseSite + @"_includes\head.cshtml"));
+            }
 
             Assert.Equal(!wiki, fileSystem.File.Exists(BaseSite + @"_layouts\post.cshtml"));
             Assert.Equal(!wiki, fileSystem.File.Exists(BaseSite + "about.md"));
@@ -127,6 +138,70 @@ namespace Pretzel.Tests.Recipe
             recipe.Create();
 
             additionalIngredient.DidNotReceive().MixIn(BaseSite);
+        }
+
+        [Fact]
+        public void liquid_engine_with_wiki()
+        {
+            fileSystem = new MockFileSystem(new Dictionary<string, MockFileData>());
+
+            var recipe = new Logic.Recipe.Recipe(fileSystem, "liquid", BaseSite, Enumerable.Empty<IAdditionalIngredient>(), false, true);
+            recipe.Create();
+
+            Assert.True(writer.ToString().Contains("Wiki switch not valid with liquid templating engine"));
+        }
+
+        [Fact]
+        public void razor_engine_with_project()
+        {
+            fileSystem = new MockFileSystem(new Dictionary<string, MockFileData>());
+
+            var recipe = new Logic.Recipe.Recipe(fileSystem, "razor", BaseSite, Enumerable.Empty<IAdditionalIngredient>(), true, false);
+            recipe.Create();
+
+            Assert.Equal(40, fileSystem.AllPaths.Count());
+            Assert.True(fileSystem.AllFiles.Contains(@"c:\site\_layouts\Properties\AssemblyInfo.cs"));
+            Assert.True(fileSystem.AllFiles.Contains(@"c:\site\_layouts\PretzelClasses\Category.cs"));
+            Assert.True(fileSystem.AllFiles.Contains(@"c:\site\_layouts\LayoutProject.csproj"));
+            Assert.True(fileSystem.AllFiles.Contains(@"c:\site\_layouts\layoutSolution.sln"));
+            Assert.True(fileSystem.AllFiles.Contains(@"c:\site\_layouts\PretzelClasses\NonProcessedPage.cs"));
+            Assert.True(fileSystem.AllFiles.Contains(@"c:\site\_layouts\.nuget\NuGet.config"));
+            Assert.True(fileSystem.AllFiles.Contains(@"c:\site\_layouts\.nuget\NuGet.exe"));
+            Assert.True(fileSystem.AllFiles.Contains(@"c:\site\_layouts\.nuget\NuGet.targets"));
+            Assert.True(fileSystem.AllFiles.Contains(@"c:\site\_layouts\PretzelClasses\PageContext.cs"));
+            Assert.True(fileSystem.AllFiles.Contains(@"c:\site\_layouts\PretzelClasses\Page.cs"));
+            Assert.True(fileSystem.AllFiles.Contains(@"c:\site\_layouts\PretzelClasses\Paginator.cs"));
+            Assert.True(fileSystem.AllFiles.Contains(@"c:\site\_layouts\PretzelClasses\SiteContext.cs"));
+            Assert.True(fileSystem.AllFiles.Contains(@"c:\site\_layouts\PretzelClasses\Tag.cs"));
+            Assert.True(fileSystem.AllFiles.Contains(@"c:\site\_layouts\web.config"));
+            Assert.True(fileSystem.AllFiles.Contains(@"c:\site\_layouts\packages.config"));
+        }
+
+        [Fact]
+        public void error_is_traced()
+        {
+            Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
+            Thread.CurrentThread.CurrentUICulture = CultureInfo.InvariantCulture;
+            var fileSubstitute = Substitute.For<FileBase>();
+            fileSubstitute.When(f => f.WriteAllText(Arg.Any<string>(), Arg.Any<string>())).Do(x => { throw new Exception("Error!!!"); });
+
+            var fileSystemSubstitute = Substitute.For<IFileSystem>();
+            fileSystemSubstitute.File.Returns(fileSubstitute);
+
+            var recipe = new Logic.Recipe.Recipe(fileSystemSubstitute, "liquid", BaseSite, Enumerable.Empty<IAdditionalIngredient>(), false, false);
+            recipe.Create();
+
+            Assert.Contains(@"Error trying to create template: System.Exception: Error!!!", writer.ToString());
+            Assert.Contains(@"at Pretzel.Tests.Recipe.RecipeTests.<error_is_traced>b__0(CallInfo x)", writer.ToString());
+        }
+
+        [Fact]
+        public void Drafts_Folders_Is_Created()
+        {
+            var recipe = new Logic.Recipe.Recipe(fileSystem, "liquid", BaseSite, Enumerable.Empty<IAdditionalIngredient>(), false, false, true);
+            recipe.Create();
+
+            Assert.True(fileSystem.Directory.Exists(BaseSite + @"_drafts\"));
         }
     }
 }

@@ -68,10 +68,20 @@ namespace Pretzel
 
             if (!content.IsAvailable(path))
             {
-                var response = new Response(env) { ContentType = path.MimeType() };
+                var path404 = "/404.html";
+                var use404 = content.IsAvailable(path404);
+
+                var response = new Response(env) { ContentType = use404 ? path404.MimeType() : path.MimeType() };
                 using (var writer = new StreamWriter(response.OutputStream))
                 {
-                    writer.Write("Page not found: " + path);
+                    if (use404)
+                    {
+                        writer.Write(content.GetContent(path404));
+                    }
+                    else
+                    {
+                        writer.Write("Page not found: " + path);
+                    }
                 }
                 return TaskHelpers.Completed();
             }
@@ -83,6 +93,12 @@ namespace Pretzel
                 response.Headers["Content-Range"] = new[] { string.Format("bytes 0-{0}", (fileContents.Length - 1)) };
                 response.Headers["Content-Length"] = new[] { fileContents.Length.ToString(CultureInfo.InvariantCulture) };
                 response.Write(new ArraySegment<byte>(fileContents));
+            }
+            else if (content.IsDirectory(path) && !path.EndsWith("/")) 
+            {
+                //if path is a directory without trailing slash, redirects to the same url with a trailing slash
+                var response = new Response(env) { Status = "301 Moved Permanently" };
+                response.Headers["Location"] = new[] { String.Format("http://localhost:{0}{1}/", Port, path) };
             }
             else
             {
@@ -109,10 +125,6 @@ namespace Pretzel
         {
             if (!isDisposed)
             {
-                if (disposing)
-                {
-                }
-
                 if (host != null)
                 {
                     host.Dispose();

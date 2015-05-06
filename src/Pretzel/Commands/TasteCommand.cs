@@ -19,12 +19,22 @@ namespace Pretzel.Commands
     {
         private ISiteEngine engine;
 #pragma warning disable 649
-        [Import] TemplateEngineCollection templateEngines;
-        [Import] SiteContextGenerator Generator { get; set; }
-        [Import] CommandParameters parameters;
+
+        [Import]
+        private TemplateEngineCollection templateEngines;
+
+        [Import]
+        private SiteContextGenerator Generator { get; set; }
+
+        [Import]
+        private CommandParameters parameters;
+
         [ImportMany]
         private IEnumerable<ITransform> transforms;
-        [Import] IFileSystem FileSystem;
+
+        [Import]
+        private IFileSystem FileSystem;
+
 #pragma warning restore 649
 
         public void Execute(IEnumerable<string> arguments)
@@ -33,7 +43,7 @@ namespace Pretzel.Commands
 
             parameters.Parse(arguments);
 
-            var context = Generator.BuildContext(parameters.Path, parameters.IncludeDrafts);
+            var context = Generator.BuildContext(parameters.Path, parameters.DestinationPath, parameters.IncludeDrafts);
 
             if (parameters.CleanTarget && FileSystem.Directory.Exists(context.OutputFolder))
             {
@@ -59,53 +69,58 @@ namespace Pretzel.Commands
             engine.Process(context, skipFileOnError: true);
             foreach (var t in transforms)
                 t.Transform(context);
-            var watcher = new SimpleFileSystemWatcher();
-            watcher.OnChange(parameters.Path, WatcherOnChanged);
 
-            var w = new WebHost(engine.GetOutputDirectory(parameters.Path), new FileContentProvider(), Convert.ToInt32(parameters.Port));
-            try
+            using (var watcher = new SimpleFileSystemWatcher(parameters.DestinationPath))
             {
-                w.Start();
-            }
-            catch (System.Net.Sockets.SocketException)
-            {
-                Tracing.Info(string.Format("Port {0} is already in use", parameters.Port));
-                return;
-            }
+                watcher.OnChange(parameters.Path, WatcherOnChanged);
 
-            var url = string.Format("http://localhost:{0}/", parameters.Port);
-            if (parameters.LaunchBrowser)
-            {
-                Tracing.Info(string.Format("Opening {0} in default browser...", url));
-                try
+                using (var w = new WebHost(parameters.DestinationPath, new FileContentProvider(), Convert.ToInt32(parameters.Port)))
                 {
-                    Process.Start(url);
+                    try
+                    {
+                        w.Start();
+                    }
+                    catch (System.Net.Sockets.SocketException)
+                    {
+                        Tracing.Info(string.Format("Port {0} is already in use", parameters.Port));
+                        return;
+                    }
+
+                    var url = string.Format("http://localhost:{0}/", parameters.Port);
+                    if (parameters.LaunchBrowser)
+                    {
+                        Tracing.Info(string.Format("Opening {0} in default browser...", url));
+                        try
+                        {
+                            Process.Start(url);
+                        }
+                        catch (Exception)
+                        {
+                            Tracing.Info(string.Format("Failed to launch {0}.", url));
+                        }
+                    }
+                    else
+                    {
+                        Tracing.Info(string.Format("Browse to {0} to view the site.", url));
+                    }
+
+                    Tracing.Info("Press 'Q' to stop the web host...");
+                    ConsoleKeyInfo key;
+                    do
+                    {
+                        key = Console.ReadKey();
+                    }
+                    while (key.Key != ConsoleKey.Q);
+                    Console.WriteLine();
                 }
-                catch (Exception)
-                {
-                    Tracing.Info(string.Format("Failed to launch {0}.", url));
-                }
             }
-            else
-            {
-                Tracing.Info(string.Format("Browse to {0} to view the site.", url));
-            }
-      
-            Tracing.Info("Press 'Q' to stop the web host...");
-            ConsoleKeyInfo key;
-            do
-            {
-                key = Console.ReadKey();
-            }
-            while (key.Key != ConsoleKey.Q);
-            Console.WriteLine();
         }
 
         private void WatcherOnChanged(string file)
         {
             Tracing.Info(string.Format("File change: {0}", file));
 
-            var context = Generator.BuildContext(parameters.Path, parameters.IncludeDrafts);
+            var context = Generator.BuildContext(parameters.Path, parameters.DestinationPath, parameters.IncludeDrafts);
             if (parameters.CleanTarget && FileSystem.Directory.Exists(context.OutputFolder))
             {
                 FileSystem.Directory.Delete(context.OutputFolder, true);
@@ -117,7 +132,7 @@ namespace Pretzel.Commands
 
         public void WriteHelp(TextWriter writer)
         {
-            parameters.WriteOptions(writer, "-t", "-d", "-p", "--nobrowser", "-cleantarget");
+            parameters.WriteOptions(writer, "-t", "-d", "-p", "--nobrowser", "-cleantarget", "-s", "-destination");
         }
     }
 }

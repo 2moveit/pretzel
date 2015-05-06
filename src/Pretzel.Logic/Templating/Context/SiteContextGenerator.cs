@@ -1,4 +1,6 @@
-﻿using System;
+﻿using Pretzel.Logic.Extensibility;
+using Pretzel.Logic.Extensions;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.Globalization;
@@ -6,10 +8,6 @@ using System.IO;
 using System.IO.Abstractions;
 using System.Linq;
 using System.Text;
-using System.Text.RegularExpressions;
-using MarkdownDeep;
-using Pretzel.Logic.Extensibility;
-using Pretzel.Logic.Extensions;
 
 namespace Pretzel.Logic.Templating.Context
 {
@@ -17,25 +15,22 @@ namespace Pretzel.Logic.Templating.Context
     [PartCreationPolicy(CreationPolicy.Shared)]
     public class SiteContextGenerator
     {
-        private static readonly Regex categoryRegex = new Regex(@":category(\d*)", RegexOptions.Compiled);
-        private static readonly Regex slashesRegex = new Regex(@"/{1,}", RegexOptions.Compiled);
-
-
-        readonly Dictionary<string, Page> pageCache = new Dictionary<string, Page>();
-        static readonly Markdown Markdown = new Markdown();
-        readonly IFileSystem fileSystem;
-        readonly IEnumerable<IContentTransform> contentTransformers;
-        readonly List<string> includes = new List<string>();
-        readonly List<string> excludes = new List<string>();
+        private readonly Dictionary<string, Page> pageCache = new Dictionary<string, Page>();
+        private readonly IFileSystem fileSystem;
+        private readonly IEnumerable<IContentTransform> contentTransformers;
+        private readonly List<string> includes = new List<string>();
+        private readonly List<string> excludes = new List<string>();
+        private readonly LinkHelper linkHelper;
 
         [ImportingConstructor]
-        public SiteContextGenerator(IFileSystem fileSystem, [ImportMany]IEnumerable<IContentTransform> contentTransformers)
+        public SiteContextGenerator(IFileSystem fileSystem, [ImportMany]IEnumerable<IContentTransform> contentTransformers, LinkHelper linkHelper)
         {
             this.fileSystem = fileSystem;
             this.contentTransformers = contentTransformers;
+            this.linkHelper = linkHelper;
         }
 
-        public SiteContext BuildContext(string path, bool includeDrafts)
+        public SiteContext BuildContext(string path, string destinationPath, bool includeDrafts)
         {
             try
             {
@@ -45,28 +40,23 @@ namespace Pretzel.Logic.Templating.Context
                     config = (Dictionary<string, object>)fileSystem.File.ReadAllText(configPath).YamlHeader(true);
 
                 if (!config.ContainsKey("permalink"))
-                    config.Add("permalink", "/:year/:month/:day/:title.html");
-
-                if (config.ContainsKey("pretzel"))
                 {
-                    var pretzelSettings = config["pretzel"] as Dictionary<string, object>;
-                    if (pretzelSettings != null)
-                    {
-                        if (pretzelSettings.ContainsKey("include") && includes.Count == 0)
-                        {
-                            includes.AddRange((IEnumerable<string>)pretzelSettings["include"]);
-                        }
-                        if (pretzelSettings.ContainsKey("exclude") && excludes.Count == 0)
-                        {
-                            excludes.AddRange((IEnumerable<string>)pretzelSettings["exclude"]);
-                        }
-                    }
+                    config.Add("permalink", "date");
+                }
+
+                if (config.ContainsKey("include"))
+                {
+                    includes.AddRange((IEnumerable<string>)config["include"]);
+                }
+                if (config.ContainsKey("exclude"))
+                {
+                    excludes.AddRange((IEnumerable<string>)config["exclude"]);
                 }
 
                 var context = new SiteContext
                 {
                     SourceFolder = path,
-                    OutputFolder = Path.Combine(path, "_site"),
+                    OutputFolder = destinationPath,
                     Posts = new List<Page>(),
                     Pages = new List<Page>(),
                     Config = config,
@@ -118,8 +108,9 @@ namespace Pretzel.Logic.Templating.Context
         {
             var posts = new List<Page>();
 
-            var postsFolder = Path.Combine(context.SourceFolder, "_posts");
-            if (fileSystem.Directory.Exists(postsFolder))
+            var postsFolders = fileSystem.Directory.GetDirectories(context.SourceFolder, "_posts", SearchOption.AllDirectories);
+
+            foreach (var postsFolder in postsFolders)
             {
                 posts.AddRange(fileSystem.Directory
                     .GetFiles(postsFolder, "*.*", SearchOption.AllDirectories)
@@ -137,7 +128,6 @@ namespace Pretzel.Logic.Templating.Context
                     .Where(post => post != null)
                 );
             }
-
 
             return posts;
         }
@@ -166,23 +156,27 @@ namespace Pretzel.Logic.Templating.Context
 
                 if (post.Categories != null)
                 {
-                    foreach (var catName in post.Categories)
+                    foreach (var categoryName in post.Categories)
                     {
-                        if (categories.ContainsKey(catName))
-                        {
-                            categories[catName].Add(post);
-                        }
-                        else
-                        {
-                            categories.Add(catName, new List<Page> { post });
-                        }
+                        AddCategory(categories, categoryName, post);
                     }
                 }
-
             }
 
             context.Tags = tags.Select(x => new Tag { Name = x.Key, Posts = x.Value }).OrderBy(x => x.Name).ToList();
             context.Categories = categories.Select(x => new Category { Name = x.Key, Posts = x.Value }).OrderBy(x => x.Name).ToList();
+        }
+
+        private static void AddCategory(Dictionary<string, List<Page>> categories, string categoryName, Page post)
+        {
+            if (categories.ContainsKey(categoryName))
+            {
+                categories[categoryName].Add(post);
+            }
+            else
+            {
+                categories.Add(categoryName, new List<Page> { post });
+            }
         }
 
         private bool ContainsYamlFrontMatter(string file)
@@ -192,14 +186,24 @@ namespace Pretzel.Logic.Templating.Context
             return postFirstLine != null && postFirstLine.StartsWith("---");
         }
 
+        private bool IsExcludedPath(string relativePath)
+        {
+            return excludes.Contains(relativePath) || excludes.Any(e => relativePath.StartsWith(e));
+        }
+
+        private bool IsIncludedPath(string relativePath)
+        {
+            return includes.Contains(relativePath) || includes.Any(e => relativePath.StartsWith(e));
+        }
+
         public bool CanBeIncluded(string relativePath)
         {
-            if (excludes.Count > 0 && excludes.Contains(relativePath))
+            if (excludes.Count > 0 && IsExcludedPath(relativePath))
             {
                 return false;
             }
-            
-            if (includes.Count > 0 && includes.Contains(relativePath))
+
+            if (includes.Count > 0 && IsIncludedPath(relativePath))
             {
                 return true;
             }
@@ -210,6 +214,7 @@ namespace Pretzel.Logic.Templating.Context
         public static bool IsSpecialPath(string relativePath)
         {
             return relativePath.StartsWith("_")
+                    || relativePath.Contains("_posts")
                     || (relativePath.StartsWith(".") && relativePath != ".htaccess")
                     || relativePath.EndsWith(".TMP", StringComparison.OrdinalIgnoreCase);
         }
@@ -222,6 +227,7 @@ namespace Pretzel.Logic.Templating.Context
                     return pageCache[file];
                 var contents = SafeReadContents(file);
                 var header = contents.YamlHeader();
+                var content = RenderContent(file, contents, header);
 
                 if (header.ContainsKey("published") && header["published"].ToString().ToLower() == "false")
                 {
@@ -232,7 +238,7 @@ namespace Pretzel.Logic.Templating.Context
                                 {
                                     Title = header.ContainsKey("title") ? header["title"].ToString() : "this is a post",
                                     Date = header.ContainsKey("date") ? DateTime.Parse(header["date"].ToString()) : file.Datestamp(),
-                                    Content = RenderContent(file, contents, header),
+                                    Content = content,
                                     Filepath = isPost ? GetPathWithTimestamp(context.OutputFolder, file) : GetFilePathForPage(context, file),
                                     File = file,
                                     Bag = header,
@@ -241,8 +247,7 @@ namespace Pretzel.Logic.Templating.Context
                 // resolve categories and tags
                 if (isPost)
                 {
-                    if (header.ContainsKey("categories"))
-                        page.Categories = header["categories"] as IEnumerable<string>;
+                    page.Categories = ResolveCategories(context, header, page);
 
                     if (header.ContainsKey("tags"))
                         page.Tags = header["tags"] as IEnumerable<string>;
@@ -250,11 +255,17 @@ namespace Pretzel.Logic.Templating.Context
 
                 // resolve permalink
                 if (header.ContainsKey("permalink"))
-                    page.Url = EvaluatePermalink(header["permalink"].ToString(), page);
+                {
+                    page.Url = linkHelper.EvaluatePermalink(header["permalink"].ToString(), page);
+                }
                 else if (isPost && config.ContainsKey("permalink"))
-                    page.Url = EvaluatePermalink(config["permalink"].ToString(), page);
+                {
+                    page.Url = linkHelper.EvaluatePermalink(config["permalink"].ToString(), page);
+                }
                 else
-                    page.Url = EvaluateLink(context, page);
+                {
+                    page.Url = linkHelper.EvaluateLink(context, page);
+                }
 
                 // resolve id
                 page.Id = page.Url.Replace(".html", string.Empty).Replace("index", string.Empty);
@@ -281,26 +292,29 @@ namespace Pretzel.Logic.Templating.Context
             return null;
         }
 
+        private List<string> ResolveCategories(SiteContext context, IDictionary<string, object> header, Page page)
+        {
+            var categories = new List<string>();
+
+            var postPath = page.File.Replace(context.SourceFolder, string.Empty);
+            string rawCategories = postPath.Replace(fileSystem.Path.GetFileName(page.File), string.Empty).Replace("_posts", string.Empty);
+            categories.AddRange(rawCategories.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries));
+
+            if (header.ContainsKey("categories") && header["categories"] is IEnumerable<string>)
+            {
+                categories.AddRange((IEnumerable<string>)header["categories"]);
+            }
+            else if (header.ContainsKey("category"))
+            {
+                categories.Add((string)header["category"]);
+            }
+
+            return categories;
+        }
+
         private string GetFilePathForPage(SiteContext context, string file)
         {
             return Path.Combine(context.OutputFolder, MapToOutputPath(context, file));
-        }
-
-        private string EvaluateLink(SiteContext context, Page page)
-        {
-            var directory = Path.GetDirectoryName(page.Filepath);
-            var relativePath = directory.Replace(context.OutputFolder, string.Empty);
-            var fileExtension = Path.GetExtension(page.Filepath);
-
-            var htmlExtensions = new[] { ".markdown", ".mdown", ".mkdn", ".mkd", ".md", ".textile" };
-
-            if (htmlExtensions.Contains(fileExtension, StringComparer.InvariantCultureIgnoreCase))
-                fileExtension = ".html";
-
-            var link = relativePath.Replace('\\', '/').TrimStart('/') + "/" + GetPageTitle(page.Filepath) + fileExtension;
-            if (!link.StartsWith("/"))
-                link = "/" + link;
-            return link;
         }
 
         private IEnumerable<Page> GetDirectoryPages(SiteContext context, IDictionary<string, object> config, string forDirectory, bool isPost)
@@ -318,8 +332,9 @@ namespace Pretzel.Logic.Templating.Context
             try
             {
                 var contentsWithoutHeader = contents.ExcludeHeader();
+
                 html = Path.GetExtension(file).IsMarkdownFile()
-                       ? Markdown.Transform(contentsWithoutHeader)
+                       ? CommonMark.CommonMarkConverter.Convert(contentsWithoutHeader).Trim()
                        : contentsWithoutHeader;
 
                 html = contentTransformers.Aggregate(html, (current, contentTransformer) => contentTransformer.Transform(current));
@@ -393,40 +408,6 @@ namespace Pretzel.Logic.Templating.Context
             }
         }
 
-        // https://github.com/mojombo/jekyll/wiki/permalinks
-        private string EvaluatePermalink(string permalink, Page page)
-        {
-            permalink = permalink.Replace(":categories", string.Join("-", page.Categories.ToArray()));
-            permalink = permalink.Replace(":year", page.Date.Year.ToString(CultureInfo.InvariantCulture));
-            permalink = permalink.Replace(":month", page.Date.ToString("MM"));
-            permalink = permalink.Replace(":day", page.Date.ToString("dd"));
-            permalink = permalink.Replace(":title", GetTitle(page.File));
-
-            if (permalink.Contains(":category"))
-            {
-                var matches = categoryRegex.Matches(permalink);
-                if (matches != null && matches.Count > 0)
-                {
-                    foreach (Match match in matches)
-                    {
-                        var replacementValue = string.Empty;
-                        int categoryIndex;
-                        if (match.Success && int.TryParse(match.Groups[1].Value, out categoryIndex) && categoryIndex > 0)
-                        {
-                            replacementValue = page.Categories.Skip(categoryIndex- 1).FirstOrDefault();
-                        }
-
-                        permalink = permalink.Replace(match.Value, replacementValue);
-                    }
-                }
-            }
-
-
-            permalink = slashesRegex.Replace(permalink, "/");
-
-            return permalink;
-        }
-
         // http://stackoverflow.com/questions/6716832/sanitizing-string-to-url-safe-format
         public static string RemoveDiacritics(string strThis)
         {
@@ -459,16 +440,6 @@ namespace Pretzel.Logic.Templating.Context
             var timestamp = string.Join("\\", tokens.Take(3)).Trim('\\');
             var title = string.Join("-", tokens.Skip(3));
             return Path.Combine(outputDirectory, timestamp, title);
-        }
-
-        static readonly Regex TimestampAndTitleFromPathRegex = new Regex(@"\\(?:(?<timestamp>\d+-\d+-\d+)-)?(?<title>[^\\]*)\.[^\.]+$");
-        public static string GetTitle(string file)
-        {
-            return TimestampAndTitleFromPathRegex.Match(file).Groups["title"].Value;
-        }
-        private string GetPageTitle(string file)
-        {
-            return Path.GetFileNameWithoutExtension(file);
         }
     }
 }

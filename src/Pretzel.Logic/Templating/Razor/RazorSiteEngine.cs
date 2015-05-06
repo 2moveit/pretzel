@@ -1,10 +1,12 @@
-﻿using System;
+﻿using Pretzel.Logic.Extensions;
+using Pretzel.Logic.Templating.Context;
+using RazorEngine;
+using RazorEngine.Configuration;
+using RazorEngine.Templating;
+using System;
 using System.ComponentModel.Composition;
 using System.IO;
 using System.Text.RegularExpressions;
-using Pretzel.Logic.Templating.Context;
-using RazorEngine.Configuration;
-using RazorEngine.Templating;
 
 namespace Pretzel.Logic.Templating.Razor
 {
@@ -12,37 +14,43 @@ namespace Pretzel.Logic.Templating.Razor
     [SiteEngineInfo(Engine = "razor")]
     public class RazorSiteEngine : JekyllEngineBase
     {
+        private static readonly string[] layoutExtensions = { ".cshtml" };
+
+        private string includesPath;
+
         public override void Initialize()
         {
         }
 
         protected override void PreProcess()
         {
+            includesPath = Path.Combine(Context.SourceFolder, "_includes");
         }
 
-        protected override string LayoutExtension
+        protected override string[] LayoutExtensions
         {
-            get { return ".cshtml"; }
+            get { return layoutExtensions; }
         }
 
         protected override string RenderTemplate(string content, PageContext pageData)
         {
-           var includesPath = Path.Combine(pageData.Site.SourceFolder, "_includes");
-           var serviceConfig = new TemplateServiceConfiguration
-                               {
-                                  Resolver = new IncludesResolver(FileSystem, includesPath),
-                                  BaseTemplateType = typeof (ExtensibleTemplate<>)
-                               };
-           serviceConfig.Activator = new ExtensibleActivator(serviceConfig.Activator, Filters);
-           RazorEngine.Razor.SetTemplateService(new TemplateService(serviceConfig));
+            var serviceConfiguration = new TemplateServiceConfiguration
+            {
+                TemplateManager = new IncludesResolver(FileSystem, includesPath),
+                BaseTemplateType = typeof(ExtensibleTemplate<>)
+            };
+            serviceConfiguration.Activator = new ExtensibleActivator(serviceConfiguration.Activator, Filters, Tags);
+            Engine.Razor = RazorEngineService.Create(serviceConfiguration);
 
-           content = Regex.Replace(content, "<p>(@model .*?)</p>", "$1");
+            content = Regex.Replace(content, "<p>(@model .*?)</p>", "$1");
+
             try
             {
-                return RazorEngine.Razor.Parse(content, pageData);
+                return Engine.Razor.RunCompile(content, pageData.Page.File, typeof(PageContext), pageData);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                Tracing.Debug(ex.Message + Environment.NewLine + ex.StackTrace);
                 Console.WriteLine(@"Failed to render template, falling back to direct content");
                 return content;
             }

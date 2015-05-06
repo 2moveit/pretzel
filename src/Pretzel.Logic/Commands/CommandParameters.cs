@@ -1,14 +1,14 @@
-using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.ComponentModel.Composition;
-using System.IO;
-using System.Linq;
 using NDesk.Options;
 using Pretzel.Logic.Extensibility;
 using Pretzel.Logic.Extensions;
 using Pretzel.Logic.Templating;
 using Pretzel.Logic.Templating.Context;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel.Composition;
+using System.IO;
+using System.IO.Abstractions;
+using System.Linq;
 
 namespace Pretzel.Logic.Commands
 {
@@ -17,23 +17,24 @@ namespace Pretzel.Logic.Commands
     public class CommandParameters
     {
         [ImportingConstructor]
-        public CommandParameters([ImportMany] IEnumerable<IHaveCommandLineArgs> commandLineExtensions)
+        public CommandParameters([ImportMany] IEnumerable<IHaveCommandLineArgs> commandLineExtensions, IFileSystem fileSystem)
         {
-            GetDefaultValue("Port", s => decimal.TryParse(s, out port));
-            GetDefaultValue("LaunchBrowser", s => bool.TryParse(s, out launchBrowser));
+            this.fileSystem = fileSystem;
+
+            port = 8080;
             LaunchBrowser = true;
 
             Settings = new OptionSet
                 {
-                    {"t|template=", "The templating engine to use", v => Template = v},
-                    {"d|directory=", "The path to site directory", p => Path = p},
-                    {"p|port=", "The port to test the site locally", p => decimal.TryParse(p, out port)},
-                    {"i|import=", "The import type", v => ImportType = v}, // TODO: necessary?
-                    {"f|file=", "Path to import file", v => ImportPath = v},
-                    {"drafts", "Add the posts in the drafts folder", v => IncludeDrafts = true},
-                    {"nobrowser", "Do not launch a browser", v => LaunchBrowser = false},
-                    { "withproject", "Includes a layout VS Solution, to give intellisence when editing razor layout files", v=>WithProject = (v!=null)},
-                    { "wiki", "Creates a wiki instead of a blog (razor template only)", v=>Wiki = (v!=null)},
+                    { "t|template=", "The templating engine to use", v => Template = v },
+                    { "p|port=", "The port to test the site locally", p => decimal.TryParse(p, out port) },
+                    { "i|import=", "The import type", v => ImportType = v },
+                    { "f|file=", "Path to import file", v => ImportPath = v },
+                    { "destination=", "The path to the destination site (default _site)", d => DestinationPath = d},
+                    { "drafts", "Add the posts in the drafts folder", v => IncludeDrafts = true },
+                    { "nobrowser", "Do not launch a browser", v => LaunchBrowser = false },
+                    { "withproject", "Includes a layout VS Solution, to give intellisense when editing razor layout files", v => WithProject = (v!=null) },
+                    { "wiki", "Creates a wiki instead of a blog (razor template only)", v => Wiki = (v!=null) },
                     { "cleantarget", "Delete the target directory (_site by default)", v => CleanTarget = true }
                 };
 
@@ -44,39 +45,37 @@ namespace Pretzel.Logic.Commands
             }
         }
 
-        private void GetDefaultValue(string propertyName, Action<string> converter)
-        {
-            var attributes = TypeDescriptor.GetProperties(this)[propertyName].Attributes;
-            var myAttribute = (DefaultValueAttribute)attributes[typeof(DefaultValueAttribute)];
-            converter(myAttribute.Value.ToString());
-        }
+        [Import("SourcePath")]
+        public string Path { get; internal set; }
 
-        public string Path { get; private set; }
         public string Template { get; private set; }
+
         public string ImportPath { get; private set; }
+
         public string ImportType { get; private set; }
+
         public bool WithProject { get; private set; }
+
         public bool Wiki { get; private set; }
-        public bool IncludeDrafts { get; set; }
-        public bool CleanTarget { get; set; }
 
-        bool launchBrowser;
-        [DefaultValue(true)]
-        public bool LaunchBrowser
-        {
-            get { return launchBrowser; }
-            set { launchBrowser = value; }
-        }
+        public bool IncludeDrafts { get; private set; }
 
-        decimal port;
-        [DefaultValue(8080)]
+        public bool CleanTarget { get; private set; }
+
+        public bool LaunchBrowser { get; private set; }
+
+        public string DestinationPath { get; private set; }
+
+        private decimal port;
+
         public decimal Port
         {
             get { return port; }
-            set { port = value; }
         }
 
         private OptionSet Settings { get; set; }
+
+        private IFileSystem fileSystem;
 
         public void Parse(IEnumerable<string> arguments)
         {
@@ -84,16 +83,14 @@ namespace Pretzel.Logic.Commands
 
             Settings.Parse(argumentList);
 
-            var firstArgument = argumentList.FirstOrDefault();
-
-            if (firstArgument != null && !firstArgument.StartsWith("-") && !firstArgument.StartsWith("/"))
+            if (string.IsNullOrEmpty(DestinationPath))
             {
-                Path = System.IO.Path.IsPathRooted(firstArgument)
-                    ? firstArgument
-                    : System.IO.Path.Combine(Directory.GetCurrentDirectory(), firstArgument);
+                DestinationPath = "_site";
             }
-
-            Path = string.IsNullOrWhiteSpace(Path) ? Directory.GetCurrentDirectory() : System.IO.Path.GetFullPath(Path);
+            if (!fileSystem.Path.IsPathRooted(DestinationPath))
+            {
+                DestinationPath = fileSystem.Path.Combine(Path, DestinationPath);
+            }
         }
 
         public void DetectFromDirectory(IDictionary<string, ISiteEngine> engines, SiteContext context)

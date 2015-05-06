@@ -10,7 +10,7 @@ namespace Pretzel.Logic.Recipe
 {
     public class Recipe
     {
-        public Recipe(IFileSystem fileSystem, string engine, string directory, IEnumerable<IAdditionalIngredient> additionalIngredients, bool withProject, bool wiki)
+        public Recipe(IFileSystem fileSystem, string engine, string directory, IEnumerable<IAdditionalIngredient> additionalIngredients, bool withProject, bool wiki, bool withDrafts = false)
         {
             this.fileSystem = fileSystem;
             this.engine = engine;
@@ -18,6 +18,7 @@ namespace Pretzel.Logic.Recipe
             this.additionalIngredients = additionalIngredients;
             this.withProject = withProject;
             this.wiki = wiki;
+            this.withDrafts = withDrafts;
         }
 
         private readonly IFileSystem fileSystem;
@@ -26,6 +27,7 @@ namespace Pretzel.Logic.Recipe
         private readonly IEnumerable<IAdditionalIngredient> additionalIngredients;
         private readonly bool withProject;
         private readonly bool wiki;
+        private readonly bool withDrafts;
 
         public void Create()
         {
@@ -59,6 +61,7 @@ namespace Pretzel.Logic.Recipe
                         fileSystem.File.WriteAllText(Path.Combine(directory, string.Format(@"_posts\{0}-myfirstpost.md", DateTime.Today.ToString("yyyy-MM-dd"))), Properties.Razor.FirstPost);
                         fileSystem.File.WriteAllText(Path.Combine(directory, @"css\style.css"), Properties.Resources.Style);
                         fileSystem.File.WriteAllText(Path.Combine(directory, @"_config.yml"), Properties.Razor.Config);
+                        fileSystem.File.WriteAllText(Path.Combine(directory, @"_includes\head.cshtml"), Properties.Razor.Head);
                         CreateImages();
                     }
 
@@ -84,6 +87,7 @@ namespace Pretzel.Logic.Recipe
                     fileSystem.File.WriteAllText(Path.Combine(directory, string.Format(@"_posts\{0}-myfirstpost.md", DateTime.Today.ToString("yyyy-MM-dd"))), Properties.Liquid.FirstPost);
                     fileSystem.File.WriteAllText(Path.Combine(directory, @"css\style.css"), Properties.Resources.Style);
                     fileSystem.File.WriteAllText(Path.Combine(directory, @"_config.yml"), Properties.Liquid.Config);
+                    fileSystem.File.WriteAllText(Path.Combine(directory, @"_includes\head.html"), Properties.Liquid.Head);
 
                     CreateImages();
 
@@ -159,8 +163,12 @@ namespace Pretzel.Logic.Recipe
         {
             fileSystem.Directory.CreateDirectory(Path.Combine(directory, @"_posts"));
             fileSystem.Directory.CreateDirectory(Path.Combine(directory, @"_layouts"));
+            fileSystem.Directory.CreateDirectory(Path.Combine(directory, @"_includes"));
             fileSystem.Directory.CreateDirectory(Path.Combine(directory, @"css"));
             fileSystem.Directory.CreateDirectory(Path.Combine(directory, @"img"));
+            if (withDrafts) {
+                fileSystem.Directory.CreateDirectory(Path.Combine(directory, @"_drafts"));
+            }
         }
     }
 }

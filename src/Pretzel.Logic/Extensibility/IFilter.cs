@@ -1,7 +1,9 @@
-﻿namespace Pretzel.Logic.Extensibility
+﻿using System.ComponentModel.Composition;
+
+namespace Pretzel.Logic.Extensibility
 {
-   public interface IFilter
-   {
-      string Name { get; }
-   }
+    [InheritedExport]
+    public interface IFilter : IName
+    {
+    }
 }
